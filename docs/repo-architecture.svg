@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="420" viewBox="0 0 980 420" role="img" aria-labelledby="title desc">
+  <title id="title">Infinity AI Agent Demonstrations Architecture</title>
+  <desc id="desc">High-level repository architecture showing Inspector and DeepEval applications and their integration with Pega and evaluation outputs.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #f7f7f2; }
+      .title { font: 700 24px 'Segoe UI', Arial, sans-serif; fill: #1f2937; }
+      .label { font: 600 16px 'Segoe UI', Arial, sans-serif; fill: #111827; }
+      .text { font: 14px 'Segoe UI', Arial, sans-serif; fill: #374151; }
+      .box { fill: #ffffff; stroke: #1f2937; stroke-width: 2; rx: 12; ry: 12; }
+      .repo { fill: #eef6ff; stroke: #1d4ed8; }
+      .inspector { fill: #ecfeff; stroke: #0e7490; }
+      .deepeval { fill: #f0fdf4; stroke: #166534; }
+      .pega { fill: #fff7ed; stroke: #c2410c; }
+      .output { fill: #f5f3ff; stroke: #6d28d9; }
+      .arrow { stroke: #1f2937; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .dashed { stroke-dasharray: 7 6; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1f2937" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="980" height="420" />
+  <text class="title" x="26" y="38">Infinity AI Agent Demonstrations</text>
+
+  <rect class="box repo" x="20" y="60" width="940" height="340" />
+  <text class="label" x="42" y="92">Repository Root</text>
+
+  <rect class="box inspector" x="60" y="130" width="270" height="120" />
+  <text class="label" x="80" y="160">apps/pega-agent-inspector</text>
+  <text class="text" x="80" y="186">Interactive agent inspection</text>
+  <text class="text" x="80" y="206">and multi-turn chat testing</text>
+
+  <rect class="box deepeval" x="360" y="130" width="270" height="120" />
+  <text class="label" x="380" y="160">apps/deepeval-pega</text>
+  <text class="text" x="380" y="186">Golden sessions + DeepEval</text>
+  <text class="text" x="380" y="206">regression and quality scoring</text>
+
+  <rect class="box pega" x="670" y="130" width="250" height="120" />
+  <text class="label" x="690" y="160">Pega Agent Environment</text>
+  <text class="text" x="690" y="186">DX API / A2A endpoints</text>
+  <text class="text" x="690" y="206">OAuth-secured agent access</text>
+
+  <rect class="box output" x="240" y="285" width="500" height="85" />
+  <text class="label" x="260" y="316">Outputs</text>
+  <text class="text" x="260" y="340">QA reports, SQLite run history, and MCP-queryable evaluation data</text>
+
+  <path class="arrow" d="M330 190 L360 190" />
+  <path class="arrow" d="M630 190 L670 190" />
+  <path class="arrow" d="M670 220 L630 220" />
+  <path class="arrow dashed" d="M500 250 L500 285" />
+</svg>
