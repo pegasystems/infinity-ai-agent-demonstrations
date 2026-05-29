@@ -1,0 +1,18 @@
+{
+  "jwt_secret_key": "CHANGE-ME-generate-a-random-256-bit-key",
+  "token_expiry_minutes": 60,
+  "clients": [
+    {
+      "client_id": "ci-pipeline",
+      "client_secret": "CHANGE-ME-use-a-strong-random-secret",
+      "scopes": [
+        "projects:read",
+        "projects:write",
+        "datasets:read",
+        "datasets:write",
+        "evaluations:read",
+        "evaluations:write"
+      ]
+    }
+  ]
+}
