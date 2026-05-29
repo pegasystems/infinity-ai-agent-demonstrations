@@ -1,0 +1,56 @@
+{
+  "$schema": "./project_config_schema.json",
+  "_comment": "Project configuration for the DeepEval golden session test suite. Fill in the fields below, then run capture_golden_session.py to record a golden session. Auto-sensed fields are merged into the generated profile.",
+
+  "project_name": "My Agent Project",
+  "version": "1.0",
+  "agent_type": "conversational",
+
+  "connection": {
+    "base_url": "https://your-pega-instance.example.com",
+    "agent_name": "YOUR-AGENT-NAME",
+    "a2a_app_path": "your-app",
+    "token_url_override": null
+  },
+
+  "agent_identity": {
+    "role": "Describe what this agent does — this is used by the LLM judge to evaluate conversation quality, role adherence, and completeness.",
+    "domain": "What business domain does this agent serve?",
+    "organization": "Organization name",
+    "off_topic_guidance": "What topics should the agent refuse to answer?"
+  },
+
+  "workflows": [
+    {
+      "id": "my_workflow",
+      "description": "High-level description of the multi-step workflow this agent drives.",
+      "stages": [
+        {"name": "Stage 1", "description": "What happens in this stage."},
+        {"name": "Stage 2", "description": "What happens in this stage."}
+      ]
+    }
+  ],
+
+  "hallucination_context": [
+    "Add factual statements about what the agent can and should do.",
+    "These are used by the LLM judge to determine whether agent responses are grounded.",
+    "Include information about tools, integrations, data sources the agent accesses.",
+    "Include expected response patterns (e.g., 'The agent always asks X before Y')."
+  ],
+
+  "tool_patterns": {
+    "_comment": "Supplemental regex → tool name mappings. Auto-sensed patterns from the golden recording are merged in. Only add patterns here for tools the auto-sensor may miss.",
+    "patterns": [],
+    "labels": {}
+  },
+
+  "step_agent_patterns": {
+    "_comment": "Supplemental regex → step agent name. Auto-sensed patterns from content are merged in.",
+    "patterns": []
+  },
+
+  "silent_upload_patterns": {
+    "_comment": "Patterns in assistant text indicating a silent (text-free) file upload by the user.",
+    "patterns": []
+  }
+}

@@ -1,0 +1,54 @@
+assets/external/
+.states
+*.db
+*.py[cod]
+.web
+# Credentials & secrets
+.env
+evaluator-sa-key.json
+llm_profiles/.credentials.json
+api_clients.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# DeepEval cache
+.deepeval/
+
+# Pytest
+.pytest_cache/
+
+# Reports (generated — open latest_qa_report.md for current results)
+latest_qa_report.md
+QA_Report_*.md
+DeepEval_Test_Report_*.md
+
+# Log files
+*.log
+
+# Temporary diagnostic / debug scripts
+_trace_conv_id.py
+_live_run_*.json
+test_results/_pytest_results_*.json
+sample_agent_output.json
+to-do.md
+project_templates/project_config.uplus_retail_bank.json
+golden_sessions/golden_*.json
+golden_sessions/profile_*.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+
+# Database
+qa_results.db
