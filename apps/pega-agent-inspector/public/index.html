@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pega Agent Inspector</title>
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <span class="app-title">Pega Agent Inspector</span>
+    <div id="status-bar" class="status-bar" aria-live="polite"></div>
+    <button id="theme-toggle" class="btn-theme-toggle" title="Toggle light/dark mode" aria-label="Toggle light/dark mode">☀️</button>
+  </header>
+
+  <main class="panels">
+
+    <!-- ── Panel 1: Configuration ────────────────────────────────── -->
+    <section class="panel panel-config" id="panel-config">
+      <div class="panel-header">Configuration</div>
+      <div class="panel-body">
+
+        <fieldset class="field-group">
+          <legend>Pega Connection</legend>
+          <label for="base-url">Base Application URL</label>
+          <input type="url" id="base-url" placeholder="https://your-pega-instance.com" autocomplete="off" />
+        </fieldset>
+
+        <fieldset class="field-group">
+          <legend>OAuth 2.0 — Client Credentials</legend>
+          <label for="token-endpoint">Access Token Endpoint</label>
+          <input type="url" id="token-endpoint" placeholder="https://…/oauth2/token" autocomplete="off" />
+
+          <label for="client-id">Client ID</label>
+          <input type="text" id="client-id" placeholder="client_id" autocomplete="off" />
+
+          <label for="client-secret">Client Secret</label>
+          <input type="password" id="client-secret" placeholder="client_secret" autocomplete="off" />
+        </fieldset>
+
+        <fieldset class="field-group">
+          <legend>Agent Protocol</legend>
+          <label for="protocol-select">Protocol</label>
+          <select id="protocol-select">
+            <option value="api">API</option>
+            <option value="a2a">A2A</option>
+          </select>
+
+          <div id="api-fields">
+            <label for="agent-id">Agent ID</label>
+            <input type="text" id="agent-id" placeholder="e.g. AGENT-001" autocomplete="off" />
+          </div>
+
+          <div id="a2a-fields" class="hidden">
+            <label for="agent-card-url">Agent Card URL</label>
+            <input type="url" id="agent-card-url" placeholder="https://…/.well-known/agent.json" autocomplete="off" />
+          </div>
+        </fieldset>
+
+      </div>
+    </section>
+
+    <!-- ── Panel 2: Inspector ─────────────────────────────────────── -->
+    <section class="panel panel-inspector" id="panel-inspector">
+      <div class="panel-header">Agent Inspection</div>
+      <div class="panel-body">
+
+        <button id="get-agent-info-btn" class="btn btn-primary">Get Agent Information</button>
+
+        <div id="agent-info-display" class="agent-info-display"></div>
+
+        <div id="agent-viz-display"></div>
+
+        <div class="history-header">Request History</div>
+        <div id="request-history-log" class="request-history-log"></div>
+
+      </div>
+    </section>
+
+    <!-- ── Panel 3: Chat ──────────────────────────────────────────── -->
+    <section class="panel panel-chat" id="panel-chat">
+      <div class="panel-header">
+        Agent Interaction
+        <button id="new-conversation-btn" class="btn btn-secondary btn-sm" title="Start a new conversation">New Conversation</button>
+      </div>
+      <div class="panel-body chat-body">
+
+        <div id="chat-messages" class="chat-messages"></div>
+
+        <div class="chat-input-row">
+          <textarea
+            id="chat-input"
+            class="chat-input"
+            placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+            rows="3"
+          ></textarea>
+          <button id="send-btn" class="btn btn-primary send-btn">
+            <span class="send-label">Send</span>
+            <span class="spinner hidden" aria-hidden="true"></span>
+          </button>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Script load order matters — globals must exist before consumers -->
+  <script src="js/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+  <script src="js/api-client.js"></script>
+  <script src="js/config-panel.js"></script>
+  <script src="js/inspector-panel.js"></script>
+  <script src="js/chat-panel.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
