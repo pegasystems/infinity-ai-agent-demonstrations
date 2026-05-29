@@ -181,6 +181,29 @@ Recommended workflow for teams:
 - At least one LLM provider credential for DeepEval judging:
   - Google Gemini, OpenAI, AWS Bedrock, or GitHub Copilot
 
+## Scripts
+
+### `scripts/sync-subtrees.sh`
+
+Synchronizes both app subtrees from their dedicated remotes into this monorepo, then pushes the result.
+
+What it does:
+
+1. Pulls latest `main` from remote `pega-agent-inspector` into `apps/pega-agent-inspector` (squashed subtree update).
+2. Pulls latest `main` from remote `deepeval-pega` into `apps/deepeval-pega` (squashed subtree update).
+3. Pushes updated branch to `origin`.
+
+Run from repository root:
+
+```bash
+bash scripts/sync-subtrees.sh
+```
+
+Requirements:
+
+- Git remotes named `pega-agent-inspector` and `deepeval-pega` must be configured.
+- You must have push access to `origin`.
+
 ## Notes
 
 - The applications are independent but complementary.
