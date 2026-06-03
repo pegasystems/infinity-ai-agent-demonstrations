@@ -15,6 +15,6 @@ git subtree pull \
   --squash
 
 echo "🚀 Pushing updates..."
-git push origin main
+git push origin master
 
 echo "✅ Done!"
