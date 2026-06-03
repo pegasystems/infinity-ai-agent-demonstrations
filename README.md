@@ -55,9 +55,9 @@ scenarios/
 scripts/
 ```
 
-## Applications
+# Applications
 
-## 1) DeepEval Pega
+## DeepEval Pega
 
 Location: [apps/deepeval-pega](apps/deepeval-pega)
 
@@ -119,7 +119,7 @@ Open API docs at `http://localhost:8100/docs`.
 - Project decisions: [apps/deepeval-pega/Decisions.md](apps/deepeval-pega/Decisions.md)
 - Regression notes: [apps/deepeval-pega/RegressionNeeds.md](apps/deepeval-pega/RegressionNeeds.md)
 
-## 2) Pega Agent Inspector
+## Pega Agent Inspector
 
 Location: [apps/pega-agent-inspector](apps/pega-agent-inspector)
 
