@@ -35,9 +35,8 @@ reflex run
 ```
 
 4. Open both apps in your browser:
-  - Inspector: `http://localhost:3000`
+  - Inspector: `http://localhost:3002`
   - DeepEval UI: `http://localhost:3000`
-  - If running both at once, start Inspector on a different port (example: `PORT=3002 npm start`).
 5. Use Inspector to validate agent behavior, then run a regression in DeepEval with a golden dataset.
 
 ## Repository Architecture (High Level)
@@ -158,7 +157,7 @@ Development mode:
 npm run dev
 ```
 
-Open `http://localhost:3000` and configure your Pega endpoint, OAuth token URL, credentials, and agent target.
+Open `http://localhost:3002` and configure your Pega endpoint, OAuth token URL, credentials, and agent target.
 
 ### Read more
 
@@ -208,5 +207,5 @@ Requirements:
 
 - The applications are independent but complementary.
 - Each app has its own runtime, dependencies, and configuration.
-- Both apps default to `localhost:3000`; run one at a time or change the inspector port via `PORT` when running together.
+- Inspector defaults to `localhost:3002` and DeepEval UI defaults to `localhost:3000`, so both can run simultaneously without port conflicts.
 - For environment variables and provider-specific setup, use each app’s README.
