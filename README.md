@@ -114,7 +114,7 @@ npm start
 npm run dev
 ```
 
-The server starts on `http://localhost:3000` by default.
+The server starts on `http://localhost:3002` by default.
 
 ## Configuration
 
@@ -122,7 +122,7 @@ All configuration is via environment variables. Create a `.env` file in the proj
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORT` | `3000` | Port the HTTP server listens on |
+| `PORT` | `3002` | Port the HTTP server listens on |
 | `NODE_ENV` | `development` | Affects request logging format (`dev` vs `combined`) |
 | `CORS_ORIGIN` | `*` | Allowed CORS origin |
 
@@ -130,7 +130,7 @@ Connection credentials (Pega URL, OAuth client ID/secret) are **not** stored in 
 
 ## Usage
 
-1. Open `http://localhost:3000` in a browser.
+1. Open `http://localhost:3002` in a browser.
 2. Fill in the **Configuration** panel:
    - **Base Application URL** — The root URL of your Pega instance (e.g. `https://pega.example.com/prweb`)
    - **Access Token Endpoint** — Your Pega OAuth token URL (e.g. `https://pega.example.com/prweb/oauth2/token`)
