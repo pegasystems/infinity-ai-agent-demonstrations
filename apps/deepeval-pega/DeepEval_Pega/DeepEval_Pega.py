@@ -22,6 +22,7 @@ from rxconfig import config
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from capture_golden_session import capture_from_structured_output, load_project_config, _normalize_workflows
+import llm_oauth
 
 # Available DeepEval metrics for evaluation
 AVAILABLE_METRICS = [
@@ -173,7 +174,7 @@ class State(rx.State):
     selected_config: str = ""
 
     # --- LLM Judge Settings ---
-    llm_provider: str = "Google Gemini"        # "Google Gemini", "AWS Bedrock", "OpenAI", or "GitHub Copilot"
+    llm_provider: str = "Google Gemini"        # "Google Gemini", "AWS Bedrock", "OpenAI", "GitHub Copilot", or "Anthropic"
     # Credential input buffers — never pre-populated from .env; cleared after each save
     llm_gemini_api_key: str = ""
     llm_gemini_model_id: str = "gemini-2.5-flash"
@@ -187,11 +188,14 @@ class State(rx.State):
     llm_openai_model_id: str = "gpt-4o"
     llm_copilot_api_key: str = ""
     llm_copilot_model_id: str = "openai/gpt-4o"
+    llm_anthropic_api_key: str = ""
+    llm_anthropic_model_id: str = "claude-sonnet-4-5"
     # Saved-key indicators (safe to transmit — booleans only, never the actual key value)
     llm_gemini_key_saved: bool = False
     llm_aws_access_key_saved: bool = False
     llm_openai_key_saved: bool = False
     llm_copilot_key_saved: bool = False
+    llm_anthropic_key_saved: bool = False
     llm_settings_status: str = ""
     llm_test_status: str = ""
     llm_testing: bool = False
@@ -208,6 +212,35 @@ class State(rx.State):
     llm_copilot_models: list = []
     llm_copilot_models_loading: bool = False
     llm_copilot_models_error: str = ""
+    llm_anthropic_models: list = []
+    llm_anthropic_models_loading: bool = False
+    llm_anthropic_models_error: str = ""
+
+    # --- OAuth ("Sign in with your account") for OpenAI / Copilot / Anthropic ---
+    # Per-provider auth method: "API Key" (default) or "Sign in"
+    llm_openai_auth_method: str = "API Key"
+    llm_copilot_auth_method: str = "API Key"
+    llm_anthropic_auth_method: str = "API Key"
+    # Signed-in indicators + human-readable status
+    llm_openai_signed_in: bool = False
+    llm_copilot_signed_in: bool = False
+    llm_anthropic_signed_in: bool = False
+    llm_openai_oauth_status: str = ""
+    llm_copilot_oauth_status: str = ""
+    llm_anthropic_oauth_status: str = ""
+    # GitHub Copilot device-code flow
+    llm_copilot_user_code: str = ""
+    llm_copilot_verification_uri: str = ""
+    llm_copilot_login_active: bool = False
+    # OpenAI / Anthropic PKCE flow: authorize URL, ephemeral verifier/state, pasted code
+    llm_openai_authorize_url: str = ""
+    llm_openai_pkce_verifier: str = ""
+    llm_openai_pkce_state: str = ""
+    llm_openai_code_input: str = ""
+    llm_anthropic_authorize_url: str = ""
+    llm_anthropic_pkce_verifier: str = ""
+    llm_anthropic_pkce_state: str = ""
+    llm_anthropic_code_input: str = ""
 
     # --- LLM Judge Profiles ---
     available_llm_profiles: List[str] = []
@@ -261,6 +294,14 @@ class State(rx.State):
     def copilot_model_options(self) -> list:
         options = list(self.llm_copilot_models)
         current = self.llm_copilot_model_id.strip()
+        if current and current not in options:
+            options.insert(0, current)
+        return options
+
+    @rx.var
+    def anthropic_model_options(self) -> list:
+        options = list(self.llm_anthropic_models)
+        current = self.llm_anthropic_model_id.strip()
         if current and current not in options:
             options.insert(0, current)
         return options
@@ -1533,19 +1574,203 @@ class State(rx.State):
     def set_llm_copilot_model_id(self, value: str):
         self.llm_copilot_model_id = value.lstrip("/")
 
+    def set_llm_anthropic_api_key(self, value: str):
+        self.llm_anthropic_api_key = value
+
+    def set_llm_anthropic_model_id(self, value: str):
+        self.llm_anthropic_model_id = value
+
+    # --- OAuth auth-method setters ---
+
+    def set_llm_openai_auth_method(self, value: str):
+        self.llm_openai_auth_method = value
+        self.llm_test_status = ""
+
+    def set_llm_copilot_auth_method(self, value: str):
+        self.llm_copilot_auth_method = value
+        self.llm_test_status = ""
+
+    def set_llm_anthropic_auth_method(self, value: str):
+        self.llm_anthropic_auth_method = value
+        self.llm_test_status = ""
+
+    def set_llm_openai_code_input(self, value: str):
+        self.llm_openai_code_input = value
+
+    def set_llm_anthropic_code_input(self, value: str):
+        self.llm_anthropic_code_input = value
+
+    def refresh_oauth_status(self):
+        """Refresh signed-in indicators from the OAuth credential vault."""
+        self.llm_openai_signed_in = llm_oauth.is_signed_in("openai")
+        self.llm_copilot_signed_in = llm_oauth.is_signed_in("copilot")
+        self.llm_anthropic_signed_in = llm_oauth.is_signed_in("anthropic")
+        self.llm_openai_oauth_status = llm_oauth.status_label("openai")
+        self.llm_copilot_oauth_status = llm_oauth.status_label("copilot")
+        self.llm_anthropic_oauth_status = llm_oauth.status_label("anthropic")
+
+    # --- GitHub Copilot device-code sign-in ---
+
+    @rx.event(background=True)
+    async def start_copilot_login(self):
+        """Begin the GitHub device-code flow and poll until authorized."""
+        loop = asyncio.get_event_loop()
+        try:
+            data = await loop.run_in_executor(None, llm_oauth.copilot_start_device_login)
+        except Exception as e:
+            async with self:
+                self.llm_copilot_oauth_status = f"❌ Could not start sign-in: {e}"
+            return
+        device_code = data.get("device_code", "")
+        interval = int(data.get("interval", 5)) or 5
+        expires_in = int(data.get("expires_in", 900)) or 900
+        async with self:
+            self.llm_copilot_login_active = True
+            self.llm_copilot_user_code = data.get("user_code", "")
+            self.llm_copilot_verification_uri = data.get(
+                "verification_uri", "https://github.com/login/device"
+            )
+            self.llm_copilot_oauth_status = "Waiting for you to authorize on GitHub..."
+
+        waited = 0
+        while waited < expires_in:
+            await asyncio.sleep(interval)
+            waited += interval
+            try:
+                status, err = await loop.run_in_executor(
+                    None, lambda: llm_oauth.copilot_poll_once(device_code)
+                )
+            except Exception as e:
+                status, err = "error", str(e)
+            if status == "ok":
+                async with self:
+                    self.llm_copilot_login_active = False
+                    self.llm_copilot_user_code = ""
+                    self.llm_copilot_verification_uri = ""
+                    self.refresh_oauth_status()
+                    self.llm_copilot_oauth_status = "✅ Signed in to GitHub Copilot"
+                return
+            if status == "slow_down":
+                interval += 5
+                continue
+            if status == "error":
+                async with self:
+                    self.llm_copilot_login_active = False
+                    self.llm_copilot_oauth_status = f"❌ Sign-in failed: {err}"
+                return
+        async with self:
+            self.llm_copilot_login_active = False
+            self.llm_copilot_oauth_status = "❌ Sign-in timed out — please try again"
+
+    def sign_out_copilot(self):
+        llm_oauth.sign_out("copilot")
+        self.llm_copilot_login_active = False
+        self.llm_copilot_user_code = ""
+        self.llm_copilot_verification_uri = ""
+        self.refresh_oauth_status()
+        self.llm_copilot_oauth_status = "Signed out of GitHub Copilot"
+
+    # --- OpenAI (ChatGPT) PKCE sign-in ---
+
+    def start_openai_login(self):
+        url, state, verifier = llm_oauth.openai_build_authorize_url()
+        self.llm_openai_authorize_url = url
+        self.llm_openai_pkce_state = state
+        self.llm_openai_pkce_verifier = verifier
+        self.llm_openai_oauth_status = (
+            "Open the sign-in link, then paste the resulting code (or full redirect URL) below."
+        )
+
+    async def complete_openai_login(self):
+        code, _state = llm_oauth.parse_code_input(self.llm_openai_code_input)
+        if not code:
+            self.llm_openai_oauth_status = "❌ Paste the authorization code first"
+            return
+        loop = asyncio.get_event_loop()
+        try:
+            await loop.run_in_executor(
+                None, lambda: llm_oauth.openai_complete_login(code)
+            )
+        except Exception as e:
+            self.llm_openai_oauth_status = f"❌ Sign-in failed: {e}"
+            return
+        self.llm_openai_authorize_url = ""
+        self.llm_openai_code_input = ""
+        self.llm_openai_pkce_verifier = ""
+        self.llm_openai_pkce_state = ""
+        self.refresh_oauth_status()
+        self.llm_openai_oauth_status = "✅ Signed in with ChatGPT"
+
+    def sign_out_openai(self):
+        llm_oauth.sign_out("openai")
+        self.llm_openai_authorize_url = ""
+        self.refresh_oauth_status()
+        self.llm_openai_oauth_status = "Signed out of ChatGPT"
+
+    # --- Anthropic (Claude) PKCE sign-in ---
+
+    def start_anthropic_login(self):
+        url, state, verifier = llm_oauth.anthropic_build_authorize_url()
+        self.llm_anthropic_authorize_url = url
+        self.llm_anthropic_pkce_state = state
+        self.llm_anthropic_pkce_verifier = verifier
+        self.llm_anthropic_oauth_status = (
+            "Open the sign-in link, authorize, then paste the code (code#state) below."
+        )
+
+    async def complete_anthropic_login(self):
+        code, pasted_state = llm_oauth.parse_code_input(self.llm_anthropic_code_input)
+        if not code:
+            self.llm_anthropic_oauth_status = "❌ Paste the authorization code first"
+            return
+        loop = asyncio.get_event_loop()
+        try:
+            # Prefer the state that came bound to the pasted code; fall back to
+            # the server-side pending state inside anthropic_complete_login.
+            await loop.run_in_executor(
+                None, lambda: llm_oauth.anthropic_complete_login(code, state=pasted_state)
+            )
+        except Exception as e:
+            self.llm_anthropic_oauth_status = f"❌ Sign-in failed: {e}"
+            return
+        self.llm_anthropic_authorize_url = ""
+        self.llm_anthropic_code_input = ""
+        self.llm_anthropic_pkce_verifier = ""
+        self.llm_anthropic_pkce_state = ""
+        self.refresh_oauth_status()
+        self.llm_anthropic_oauth_status = "✅ Signed in with Claude"
+
+    def sign_out_anthropic(self):
+        llm_oauth.sign_out("anthropic")
+        self.llm_anthropic_authorize_url = ""
+        self.refresh_oauth_status()
+        self.llm_anthropic_oauth_status = "Signed out of Claude"
+
     def load_llm_settings(self):
         """Load non-sensitive LLM settings from .env; set saved-key indicators.
 
         Raw credential values are intentionally NOT loaded into state to prevent
         them from being transmitted to the browser over the Reflex WebSocket.
         """
-        _PROVIDER_MAP = {"gemini": "Google Gemini", "bedrock": "AWS Bedrock", "openai": "OpenAI", "copilot": "GitHub Copilot"}
+        _PROVIDER_MAP = {"gemini": "Google Gemini", "bedrock": "AWS Bedrock", "openai": "OpenAI", "copilot": "GitHub Copilot", "anthropic": "Anthropic"}
         _AUTH_MAP = {"access_keys": "Access Keys", "sso_profile": "SSO Profile"}
+        _OAUTH_LABEL = {"api_key": "API Key", "oauth": "Sign in"}
         env_data = self._read_env_creds()
         raw_provider = env_data.get("LLM_PROVIDER", "gemini").lower()
         self.llm_provider = _PROVIDER_MAP.get(raw_provider, "Google Gemini")
         raw_auth = env_data.get("AWS_AUTH_METHOD", "access_keys").lower()
         self.llm_aws_auth_method = _AUTH_MAP.get(raw_auth, "Access Keys")
+        # Per-provider OAuth vs API-key method
+        self.llm_openai_auth_method = _OAUTH_LABEL.get(
+            env_data.get("OPENAI_AUTH_METHOD", "api_key").lower(), "API Key"
+        )
+        self.llm_copilot_auth_method = _OAUTH_LABEL.get(
+            env_data.get("COPILOT_AUTH_METHOD", "api_key").lower(), "API Key"
+        )
+        self.llm_anthropic_auth_method = _OAUTH_LABEL.get(
+            env_data.get("ANTHROPIC_AUTH_METHOD", "api_key").lower(), "API Key"
+        )
+        self.refresh_oauth_status()
         # Non-sensitive settings — safe to store in state
         self.llm_aws_profile = env_data.get("AWS_PROFILE", "")
         self.llm_aws_region = env_data.get("AWS_REGION", "us-east-1")
@@ -1555,17 +1780,20 @@ class State(rx.State):
         self.llm_gemini_model_id = env_data.get("GEMINI_MODEL_ID", "gemini-2.5-flash")
         self.llm_openai_model_id = env_data.get("OPENAI_MODEL_ID", "gpt-4o")
         self.llm_copilot_model_id = env_data.get("GITHUB_COPILOT_MODEL_ID", "openai/gpt-4o")
+        self.llm_anthropic_model_id = env_data.get("ANTHROPIC_MODEL_ID", "claude-sonnet-4-5")
         # Boolean indicators only — actual key values stay in .env, off the WebSocket
         self.llm_gemini_key_saved = bool(env_data.get("GEMINI_API_KEY", "").strip())
         self.llm_aws_access_key_saved = bool(env_data.get("AWS_ACCESS_KEY_ID", "").strip())
         self.llm_openai_key_saved = bool(env_data.get("OPENAI_API_KEY", "").strip())
         self.llm_copilot_key_saved = bool(env_data.get("GITHUB_COPILOT_TOKEN", "").strip())
+        self.llm_anthropic_key_saved = bool(env_data.get("ANTHROPIC_API_KEY", "").strip())
         # Ensure credential input buffers are always empty on load
         self.llm_gemini_api_key = ""
         self.llm_aws_access_key_id = ""
         self.llm_aws_secret_access_key = ""
         self.llm_openai_api_key = ""
         self.llm_copilot_api_key = ""
+        self.llm_anthropic_api_key = ""
 
     def _read_env_creds(self) -> dict:
         """Read all .env key-value pairs server-side without touching state."""
@@ -1581,7 +1809,7 @@ class State(rx.State):
 
     def save_llm_settings(self):
         """Persist LLM provider and credentials to the .env file."""
-        _PROVIDER_INTERNAL = {"Google Gemini": "gemini", "AWS Bedrock": "bedrock", "OpenAI": "openai", "GitHub Copilot": "copilot"}
+        _PROVIDER_INTERNAL = {"Google Gemini": "gemini", "AWS Bedrock": "bedrock", "OpenAI": "openai", "GitHub Copilot": "copilot", "Anthropic": "anthropic"}
         _AUTH_INTERNAL = {"Access Keys": "access_keys", "SSO Profile": "sso_profile"}
         try:
             internal = _PROVIDER_INTERNAL.get(self.llm_provider, "gemini")
@@ -1608,16 +1836,30 @@ class State(rx.State):
                 if self.llm_aws_bedrock_model_id.strip():
                     updates["AWS_BEDROCK_MODEL_ID"] = self.llm_aws_bedrock_model_id.strip()
             elif self.llm_provider == "OpenAI":
+                updates["OPENAI_AUTH_METHOD"] = (
+                    "oauth" if self.llm_openai_auth_method == "Sign in" else "api_key"
+                )
                 if self.llm_openai_api_key.strip():
                     updates["OPENAI_API_KEY"] = self.llm_openai_api_key.strip()
                 if self.llm_openai_model_id.strip():
                     updates["OPENAI_MODEL_ID"] = self.llm_openai_model_id.strip()
             elif self.llm_provider == "GitHub Copilot":
+                updates["COPILOT_AUTH_METHOD"] = (
+                    "oauth" if self.llm_copilot_auth_method == "Sign in" else "api_key"
+                )
                 raw_token = self.llm_copilot_api_key.strip()
                 if raw_token:
                     updates["GITHUB_COPILOT_TOKEN"] = raw_token.encode("ascii", errors="ignore").decode("ascii").strip()
                 if self.llm_copilot_model_id.strip():
                     updates["GITHUB_COPILOT_MODEL_ID"] = self.llm_copilot_model_id.strip()
+            elif self.llm_provider == "Anthropic":
+                updates["ANTHROPIC_AUTH_METHOD"] = (
+                    "oauth" if self.llm_anthropic_auth_method == "Sign in" else "api_key"
+                )
+                if self.llm_anthropic_api_key.strip():
+                    updates["ANTHROPIC_API_KEY"] = self.llm_anthropic_api_key.strip()
+                if self.llm_anthropic_model_id.strip():
+                    updates["ANTHROPIC_MODEL_ID"] = self.llm_anthropic_model_id.strip()
 
             self._write_env_keys(updates)
 
@@ -1632,11 +1874,13 @@ class State(rx.State):
             self.llm_aws_secret_access_key = ""
             self.llm_openai_api_key = ""
             self.llm_copilot_api_key = ""
+            self.llm_anthropic_api_key = ""
             # Refresh saved-key indicators
             self.llm_gemini_key_saved = bool(updates.get("GEMINI_API_KEY", "").strip() or os.environ.get("GEMINI_API_KEY", "").strip())
             self.llm_aws_access_key_saved = bool(updates.get("AWS_ACCESS_KEY_ID", "").strip() or os.environ.get("AWS_ACCESS_KEY_ID", "").strip())
             self.llm_openai_key_saved = bool(updates.get("OPENAI_API_KEY", "").strip() or os.environ.get("OPENAI_API_KEY", "").strip())
             self.llm_copilot_key_saved = bool(updates.get("GITHUB_COPILOT_TOKEN", "").strip() or os.environ.get("GITHUB_COPILOT_TOKEN", "").strip())
+            self.llm_anthropic_key_saved = bool(updates.get("ANTHROPIC_API_KEY", "").strip() or os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
             self.llm_settings_status = "✅ LLM settings saved to .env"
         except Exception as e:
@@ -1701,7 +1945,7 @@ class State(rx.State):
 
     def save_llm_profile(self):
         """Save the current LLM form state as a named profile."""
-        _PROVIDER_INTERNAL = {"Google Gemini": "gemini", "AWS Bedrock": "bedrock", "OpenAI": "openai", "GitHub Copilot": "copilot"}
+        _PROVIDER_INTERNAL = {"Google Gemini": "gemini", "AWS Bedrock": "bedrock", "OpenAI": "openai", "GitHub Copilot": "copilot", "Anthropic": "anthropic"}
         _AUTH_INTERNAL = {"Access Keys": "access_keys", "SSO Profile": "sso_profile"}
 
         name = self.llm_profile_name_input.strip()
@@ -1725,6 +1969,10 @@ class State(rx.State):
                 "aws_bedrock_model_id": self.llm_aws_bedrock_model_id.strip() or None,
                 "openai_model_id": self.llm_openai_model_id.strip() or None,
                 "copilot_model_id": self.llm_copilot_model_id.strip() or None,
+                "anthropic_model_id": self.llm_anthropic_model_id.strip() or None,
+                "openai_auth_method": "oauth" if self.llm_openai_auth_method == "Sign in" else "api_key",
+                "copilot_auth_method": "oauth" if self.llm_copilot_auth_method == "Sign in" else "api_key",
+                "anthropic_auth_method": "oauth" if self.llm_anthropic_auth_method == "Sign in" else "api_key",
                 "created_at": datetime.now().isoformat(),
             }
             self._profile_path(safe_key).write_text(json.dumps(profile_data, indent=2) + "\n")
@@ -1746,6 +1994,9 @@ class State(rx.State):
             copilot_token = self.llm_copilot_api_key.strip() or env_data.get("GITHUB_COPILOT_TOKEN", "")
             if copilot_token:
                 creds["GITHUB_COPILOT_TOKEN"] = copilot_token
+            anthropic_key = self.llm_anthropic_api_key.strip() or env_data.get("ANTHROPIC_API_KEY", "")
+            if anthropic_key:
+                creds["ANTHROPIC_API_KEY"] = anthropic_key
             self._write_llm_credentials(safe_key, creds)
 
             self.save_llm_settings()
@@ -1759,7 +2010,7 @@ class State(rx.State):
 
     def load_llm_profile(self, profile_display_name: str):
         """Load a saved profile by display name and activate it in .env."""
-        _PROVIDER_MAP = {"gemini": "Google Gemini", "bedrock": "AWS Bedrock", "openai": "OpenAI", "copilot": "GitHub Copilot"}
+        _PROVIDER_MAP = {"gemini": "Google Gemini", "bedrock": "AWS Bedrock", "openai": "OpenAI", "copilot": "GitHub Copilot", "anthropic": "Anthropic"}
         _AUTH_MAP = {"access_keys": "Access Keys", "sso_profile": "SSO Profile"}
 
         if not profile_display_name:
@@ -1792,6 +2043,15 @@ class State(rx.State):
             self.llm_aws_bedrock_model_id = data.get("aws_bedrock_model_id") or "anthropic.claude-3-5-sonnet-20241022-v2:0"
             self.llm_openai_model_id = data.get("openai_model_id") or "gpt-4o"
             self.llm_copilot_model_id = data.get("copilot_model_id") or "openai/gpt-4o"
+            self.llm_anthropic_model_id = data.get("anthropic_model_id") or "claude-sonnet-4-5"
+            _OAUTH_LABEL = {"api_key": "API Key", "oauth": "Sign in"}
+            openai_auth = data.get("openai_auth_method", "api_key")
+            copilot_auth = data.get("copilot_auth_method", "api_key")
+            anthropic_auth = data.get("anthropic_auth_method", "api_key")
+            self.llm_openai_auth_method = _OAUTH_LABEL.get(openai_auth, "API Key")
+            self.llm_copilot_auth_method = _OAUTH_LABEL.get(copilot_auth, "API Key")
+            self.llm_anthropic_auth_method = _OAUTH_LABEL.get(anthropic_auth, "API Key")
+            self.refresh_oauth_status()
 
             creds = self._read_llm_credentials(safe_key)
 
@@ -1808,11 +2068,17 @@ class State(rx.State):
                 if data.get("aws_bedrock_model_id"):
                     env_updates["AWS_BEDROCK_MODEL_ID"] = data["aws_bedrock_model_id"]
             elif provider == "openai":
+                env_updates["OPENAI_AUTH_METHOD"] = openai_auth
                 if data.get("openai_model_id"):
                     env_updates["OPENAI_MODEL_ID"] = data["openai_model_id"]
             elif provider == "copilot":
+                env_updates["COPILOT_AUTH_METHOD"] = copilot_auth
                 if data.get("copilot_model_id"):
                     env_updates["GITHUB_COPILOT_MODEL_ID"] = data["copilot_model_id"]
+            elif provider == "anthropic":
+                env_updates["ANTHROPIC_AUTH_METHOD"] = anthropic_auth
+                if data.get("anthropic_model_id"):
+                    env_updates["ANTHROPIC_MODEL_ID"] = data["anthropic_model_id"]
 
             for k, v in creds.items():
                 if v:
@@ -1827,10 +2093,12 @@ class State(rx.State):
             self.llm_aws_secret_access_key = ""
             self.llm_openai_api_key = ""
             self.llm_copilot_api_key = ""
+            self.llm_anthropic_api_key = ""
             self.llm_gemini_key_saved = bool(creds.get("GEMINI_API_KEY", ""))
             self.llm_aws_access_key_saved = bool(creds.get("AWS_ACCESS_KEY_ID", ""))
             self.llm_openai_key_saved = bool(creds.get("OPENAI_API_KEY", ""))
             self.llm_copilot_key_saved = bool(creds.get("GITHUB_COPILOT_TOKEN", ""))
+            self.llm_anthropic_key_saved = bool(creds.get("ANTHROPIC_API_KEY", ""))
 
             self.selected_llm_profile = profile_display_name
             self.llm_profile_status = f"✅ Activated: {profile_display_name}"
@@ -2051,6 +2319,7 @@ class State(rx.State):
         copilot_token = self.llm_copilot_api_key.strip() or env_data.get("GITHUB_COPILOT_TOKEN", "")
         # API tokens are always ASCII; strip any stray non-ASCII from paste artifacts
         copilot_token = copilot_token.encode("ascii", errors="ignore").decode("ascii").strip()
+        anthropic_key = self.llm_anthropic_api_key.strip() or env_data.get("ANTHROPIC_API_KEY", "")
 
         # Validate required fields before attempting
         if self.llm_provider == "Google Gemini":
@@ -2070,13 +2339,33 @@ class State(rx.State):
                     yield
                     return
         elif self.llm_provider == "OpenAI":
-            if not openai_key:
+            if self.llm_openai_auth_method == "Sign in":
+                if not self.llm_openai_signed_in:
+                    self.llm_test_status = "❌ Sign in with ChatGPT first"
+                    yield
+                    return
+            elif not openai_key:
                 self.llm_test_status = "❌ Enter an OpenAI API key first"
                 yield
                 return
         elif self.llm_provider == "GitHub Copilot":
-            if not copilot_token:
+            if self.llm_copilot_auth_method == "Sign in":
+                if not self.llm_copilot_signed_in:
+                    self.llm_test_status = "❌ Sign in with GitHub first"
+                    yield
+                    return
+            elif not copilot_token:
                 self.llm_test_status = "❌ Enter a GitHub token first"
+                yield
+                return
+        elif self.llm_provider == "Anthropic":
+            if self.llm_anthropic_auth_method == "Sign in":
+                if not self.llm_anthropic_signed_in:
+                    self.llm_test_status = "❌ Sign in with Claude first"
+                    yield
+                    return
+            elif not anthropic_key:
+                self.llm_test_status = "❌ Enter an Anthropic API key first"
                 yield
                 return
 
@@ -2095,13 +2384,26 @@ class State(rx.State):
                     None, lambda: self._test_bedrock(aws_key_id, aws_secret)
                 )
             elif self.llm_provider == "GitHub Copilot":
-                result = await loop.run_in_executor(
-                    None, lambda: self._test_copilot(copilot_token)
-                )
+                if self.llm_copilot_auth_method == "Sign in":
+                    result = await loop.run_in_executor(None, self._test_copilot_oauth)
+                else:
+                    result = await loop.run_in_executor(
+                        None, lambda: self._test_copilot(copilot_token)
+                    )
+            elif self.llm_provider == "Anthropic":
+                if self.llm_anthropic_auth_method == "Sign in":
+                    result = await loop.run_in_executor(None, self._test_anthropic_oauth)
+                else:
+                    result = await loop.run_in_executor(
+                        None, lambda: self._test_anthropic(anthropic_key)
+                    )
             else:
-                result = await loop.run_in_executor(
-                    None, lambda: self._test_openai(openai_key)
-                )
+                if self.llm_openai_auth_method == "Sign in":
+                    result = await loop.run_in_executor(None, self._test_openai_oauth)
+                else:
+                    result = await loop.run_in_executor(
+                        None, lambda: self._test_openai(openai_key)
+                    )
             self.llm_test_status = result
         except Exception as e:
             self.llm_test_status = f"❌ Connection failed: {e}"
@@ -2215,6 +2517,70 @@ class State(rx.State):
         preview = (response.choices[0].message.content or "").strip()[:60]
         return f"✅ GitHub Copilot connection successful ({model}) — model replied: {preview}"
 
+    def _test_anthropic(self, api_key: str) -> str:
+        """Synchronous Anthropic connectivity check (run in executor)."""
+        from anthropic import Anthropic
+        model = self.llm_anthropic_model_id.strip() or "claude-sonnet-4-5"
+        client = Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=10,
+            messages=[{"role": "user", "content": "Reply with just the word OK."}],
+        )
+        preview = "".join(
+            block.text for block in response.content if getattr(block, "type", None) == "text"
+        ).strip()[:60]
+        return f"✅ Anthropic connection successful ({model}) — model replied: {preview}"
+
+    def _test_openai_oauth(self) -> str:
+        """Connectivity check for the ChatGPT subscription (OAuth) path."""
+        model = self.llm_openai_model_id.strip() or "gpt-5"
+        text = llm_oauth.openai_chatgpt_generate(
+            model, "You are a connectivity test.", "Reply with just the word OK."
+        )
+        return f"✅ ChatGPT (OAuth) connection successful ({model}) — model replied: {text.strip()[:60]}"
+
+    def _test_copilot_oauth(self) -> str:
+        """Connectivity check for the Copilot subscription (OAuth) path."""
+        from openai import OpenAI
+        model = (self.llm_copilot_model_id.strip() or "gpt-4o").lstrip("/")
+        token = llm_oauth.get_copilot_token()
+        client = OpenAI(
+            api_key=token,
+            base_url=llm_oauth.get_copilot_api_base(),
+            default_headers=llm_oauth.copilot_request_headers(),
+        )
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Reply with just the word OK."}],
+            max_tokens=10,
+        )
+        preview = (response.choices[0].message.content or "").strip()[:60]
+        return f"✅ GitHub Copilot (OAuth) connection successful ({model}) — model replied: {preview}"
+
+    def _test_anthropic_oauth(self) -> str:
+        """Connectivity check for the Claude subscription (OAuth) path."""
+        from anthropic import Anthropic
+        model = self.llm_anthropic_model_id.strip() or "claude-sonnet-4-5-20250929"
+        token = llm_oauth.get_anthropic_token()
+        client = Anthropic(
+            auth_token=token,
+            default_headers={"anthropic-beta": llm_oauth.ANTHROPIC_OAUTH_BETA},
+        )
+        response = client.messages.create(
+            model=model,
+            max_tokens=10,
+            system=[
+                {"type": "text", "text": llm_oauth.ANTHROPIC_OAUTH_SYSTEM_PREFIX},
+                {"type": "text", "text": "You are a connectivity test."},
+            ],
+            messages=[{"role": "user", "content": "Reply with just the word OK."}],
+        )
+        preview = "".join(
+            block.text for block in response.content if getattr(block, "type", None) == "text"
+        ).strip()[:60]
+        return f"✅ Anthropic (OAuth) connection successful ({model}) — model replied: {preview}"
+
     # --- Model Listing Sync Helpers ---
 
     def _fetch_gemini_models_sync(self, api_key: str) -> list:
@@ -2309,6 +2675,36 @@ class State(rx.State):
             "openai/o4-mini",
         ]
 
+    def _fetch_anthropic_models_sync(self, api_key: str) -> list:
+        """Fetch available Anthropic models from the /v1/models endpoint."""
+        import requests as _requests
+        try:
+            resp = _requests.get(
+                "https://api.anthropic.com/v1/models",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                params={"limit": 100},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                models = [m.get("id", "") for m in data.get("data", []) if m.get("id")]
+                if models:
+                    return sorted(models)
+        except Exception:
+            pass
+        # Fallback: curated list of common Anthropic model IDs
+        return [
+            "claude-3-5-haiku-latest",
+            "claude-3-5-sonnet-latest",
+            "claude-3-7-sonnet-latest",
+            "claude-opus-4-1",
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
+        ]
+
     # --- Model Listing Async Handlers ---
 
     async def load_gemini_models(self):
@@ -2361,6 +2757,11 @@ class State(rx.State):
         yield
 
     async def load_openai_models(self):
+        if self.llm_openai_auth_method == "Sign in":
+            self.llm_openai_models = list(llm_oauth.OPENAI_OAUTH_MODELS)
+            self.llm_openai_models_error = ""
+            yield
+            return
         env_data = self._read_env_creds()
         api_key = self.llm_openai_api_key.strip() or env_data.get("OPENAI_API_KEY", "")
         if not api_key:
@@ -2385,6 +2786,26 @@ class State(rx.State):
         yield
 
     async def load_copilot_models(self):
+        if self.llm_copilot_auth_method == "Sign in":
+            if not llm_oauth.is_signed_in("copilot"):
+                self.llm_copilot_models_error = "Sign in with GitHub first"
+                yield
+                return
+            self.llm_copilot_models_loading = True
+            self.llm_copilot_models_error = ""
+            yield
+            try:
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(None, llm_oauth.copilot_list_models)
+                self.llm_copilot_models = result
+                if not result:
+                    self.llm_copilot_models_error = "No models found"
+            except Exception as e:
+                self.llm_copilot_models_error = f"Failed to load models: {e}"
+            finally:
+                self.llm_copilot_models_loading = False
+            yield
+            return
         env_data = self._read_env_creds()
         api_key = self.llm_copilot_api_key.strip() or env_data.get("GITHUB_COPILOT_TOKEN", "")
         api_key = api_key.encode("ascii", errors="ignore").decode("ascii").strip()
@@ -2407,6 +2828,50 @@ class State(rx.State):
             self.llm_copilot_models_error = f"Failed to load models: {e}"
         finally:
             self.llm_copilot_models_loading = False
+        yield
+
+    async def load_anthropic_models(self):
+        if self.llm_anthropic_auth_method == "Sign in":
+            if not llm_oauth.is_signed_in("anthropic"):
+                self.llm_anthropic_models_error = "Sign in with Claude first"
+                yield
+                return
+            self.llm_anthropic_models_loading = True
+            self.llm_anthropic_models_error = ""
+            yield
+            try:
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(None, llm_oauth.anthropic_list_models)
+                self.llm_anthropic_models = result
+                if not result:
+                    self.llm_anthropic_models_error = "No models found"
+            except Exception as e:
+                self.llm_anthropic_models_error = f"Failed to load models: {e}"
+            finally:
+                self.llm_anthropic_models_loading = False
+            yield
+            return
+        env_data = self._read_env_creds()
+        api_key = self.llm_anthropic_api_key.strip() or env_data.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            self.llm_anthropic_models_error = "Enter an Anthropic API key first"
+            yield
+            return
+        self.llm_anthropic_models_loading = True
+        self.llm_anthropic_models_error = ""
+        yield
+        try:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, lambda: self._fetch_anthropic_models_sync(api_key)
+            )
+            self.llm_anthropic_models = result
+            if not result:
+                self.llm_anthropic_models_error = "No models found"
+        except Exception as e:
+            self.llm_anthropic_models_error = f"Failed to load models: {e}"
+        finally:
+            self.llm_anthropic_models_loading = False
         yield
 
 
@@ -3480,6 +3945,214 @@ def preview_modal() -> rx.Component:
     )
 
 
+def _llm_model_selector(options, value, on_change, on_refresh, loading, error, placeholder) -> rx.Component:
+    """Shared model dropdown + refresh button used by every provider block."""
+    return rx.vstack(
+        rx.text("Model", weight="medium", size="2"),
+        rx.hstack(
+            rx.select(options, placeholder=placeholder, value=value, on_change=on_change, width="100%"),
+            rx.button(
+                rx.cond(loading, rx.spinner(size="1"), rx.icon("refresh-cw", size=14)),
+                on_click=on_refresh,
+                disabled=loading,
+                variant="ghost",
+                size="1",
+            ),
+            width="100%",
+            align="center",
+        ),
+        rx.cond(error != "", rx.text(error, size="1", color="red")),
+        align_items="start",
+        width="100%",
+    )
+
+
+def _oauth_status_row(status, signed_in, sign_out_handler) -> rx.Component:
+    """Show the signed-in indicator + a Sign out button when authenticated."""
+    return rx.vstack(
+        rx.cond(
+            signed_in,
+            rx.hstack(
+                rx.icon("circle-check", size=16, color="green"),
+                rx.text(rx.cond(status != "", status, "Signed in"), size="2", color_scheme="green"),
+                rx.button(
+                    rx.icon("log-out", size=14),
+                    "Sign out",
+                    on_click=sign_out_handler,
+                    variant="outline",
+                    color_scheme="red",
+                    size="1",
+                ),
+                spacing="2",
+                align="center",
+            ),
+            rx.cond(
+                status != "",
+                rx.text(status, size="1", color_scheme="gray"),
+            ),
+        ),
+        align_items="start",
+        width="100%",
+        spacing="1",
+    )
+
+
+def _signin_openai() -> rx.Component:
+    return rx.vstack(
+        rx.text(
+            "Use your ChatGPT (Plus/Pro) subscription. Click sign in, authorize in the "
+            "browser, then paste the resulting code or the full redirect URL below.",
+            size="1",
+            color_scheme="gray",
+        ),
+        rx.hstack(
+            rx.button(
+                rx.icon("log-in", size=16),
+                "Sign in with ChatGPT",
+                on_click=State.start_openai_login,
+                color_scheme="grass",
+                variant="solid",
+                size="2",
+            ),
+            _oauth_status_row(State.llm_openai_oauth_status, State.llm_openai_signed_in, State.sign_out_openai),
+            spacing="3",
+            align="center",
+            width="100%",
+        ),
+        rx.cond(
+            State.llm_openai_authorize_url != "",
+            rx.vstack(
+                rx.link("Open ChatGPT sign-in ↗", href=State.llm_openai_authorize_url, is_external=True, size="2"),
+                rx.hstack(
+                    rx.input(
+                        placeholder="Paste authorization code or redirect URL",
+                        value=State.llm_openai_code_input,
+                        on_change=State.set_llm_openai_code_input,
+                        width="100%",
+                    ),
+                    rx.button("Complete", on_click=State.complete_openai_login, size="2"),
+                    width="100%",
+                    spacing="2",
+                ),
+                align_items="start",
+                width="100%",
+                spacing="2",
+            ),
+        ),
+        align_items="start",
+        width="100%",
+        spacing="2",
+    )
+
+
+def _signin_anthropic() -> rx.Component:
+    return rx.vstack(
+        rx.text(
+            "Use your Claude (Pro/Max) subscription. Click sign in, authorize in the "
+            "browser, then paste the code shown (in the form code#state) below.",
+            size="1",
+            color_scheme="gray",
+        ),
+        rx.hstack(
+            rx.button(
+                rx.icon("log-in", size=16),
+                "Sign in with Claude",
+                on_click=State.start_anthropic_login,
+                color_scheme="orange",
+                variant="solid",
+                size="2",
+            ),
+            _oauth_status_row(State.llm_anthropic_oauth_status, State.llm_anthropic_signed_in, State.sign_out_anthropic),
+            spacing="3",
+            align="center",
+            width="100%",
+        ),
+        rx.cond(
+            State.llm_anthropic_authorize_url != "",
+            rx.vstack(
+                rx.link("Open Claude sign-in ↗", href=State.llm_anthropic_authorize_url, is_external=True, size="2"),
+                rx.hstack(
+                    rx.input(
+                        placeholder="Paste authorization code (code#state)",
+                        value=State.llm_anthropic_code_input,
+                        on_change=State.set_llm_anthropic_code_input,
+                        width="100%",
+                    ),
+                    rx.button("Complete", on_click=State.complete_anthropic_login, size="2"),
+                    width="100%",
+                    spacing="2",
+                ),
+                align_items="start",
+                width="100%",
+                spacing="2",
+            ),
+        ),
+        align_items="start",
+        width="100%",
+        spacing="2",
+    )
+
+
+def _signin_copilot() -> rx.Component:
+    return rx.vstack(
+        rx.text(
+            "Use your GitHub Copilot subscription. Click sign in, then enter the code "
+            "shown below at the GitHub device page — this completes automatically.",
+            size="1",
+            color_scheme="gray",
+        ),
+        rx.hstack(
+            rx.button(
+                rx.cond(State.llm_copilot_login_active, rx.spinner(size="1"), rx.icon("log-in", size=16)),
+                "Sign in with GitHub",
+                on_click=State.start_copilot_login,
+                disabled=State.llm_copilot_login_active,
+                color_scheme="iris",
+                variant="solid",
+                size="2",
+            ),
+            _oauth_status_row(State.llm_copilot_oauth_status, State.llm_copilot_signed_in, State.sign_out_copilot),
+            spacing="3",
+            align="center",
+            width="100%",
+        ),
+        rx.cond(
+            State.llm_copilot_user_code != "",
+            rx.hstack(
+                rx.text("Enter code", size="2", color_scheme="gray"),
+                rx.code(State.llm_copilot_user_code, size="3"),
+                rx.text("at", size="2", color_scheme="gray"),
+                rx.link(
+                    "github.com/login/device ↗",
+                    href=State.llm_copilot_verification_uri,
+                    is_external=True,
+                    size="2",
+                ),
+                spacing="2",
+                align="center",
+            ),
+        ),
+        align_items="start",
+        width="100%",
+        spacing="2",
+    )
+
+
+def _auth_method_selector(value, on_change) -> rx.Component:
+    return rx.vstack(
+        rx.text("Authentication Method", weight="medium", size="2"),
+        rx.select(
+            ["API Key", "Sign in"],
+            value=value,
+            on_change=on_change,
+            width="200px",
+        ),
+        align_items="start",
+        width="100%",
+        spacing="2",
+    )
+
+
 def llm_settings_section() -> rx.Component:
     """Render the LLM Judge Settings section."""
     return rx.vstack(
@@ -3596,7 +4269,7 @@ def llm_settings_section() -> rx.Component:
         rx.vstack(
             rx.text("Model Provider", weight="medium", size="2"),
             rx.select(
-                ["Google Gemini", "AWS Bedrock", "OpenAI", "GitHub Copilot"],
+                ["Google Gemini", "AWS Bedrock", "OpenAI", "GitHub Copilot", "Anthropic"],
                 placeholder="Select provider...",
                 value=State.llm_provider,
                 on_change=State.set_llm_provider,
@@ -3808,64 +4481,49 @@ def llm_settings_section() -> rx.Component:
         # OpenAI fields
         rx.cond(
             State.llm_provider == "OpenAI",
-            rx.grid(
-                rx.vstack(
-                    rx.text("OpenAI API Key", weight="medium", size="2"),
-                    rx.input(
-                        placeholder=rx.cond(
-                            State.llm_openai_key_saved,
-                            "Key saved — enter new value to replace",
-                            "sk-...",
-                        ),
-                        value=State.llm_openai_api_key,
-                        on_change=State.set_llm_openai_api_key,
-                        type="password",
-                        width="100%",
-                    ),
-                    align_items="start",
-                    width="100%",
-                ),
-                rx.vstack(
-                    rx.text("Model", weight="medium", size="2"),
-                    rx.hstack(
-                        rx.select(
-                            State.openai_model_options,
-                            placeholder="gpt-4o",
-                            value=State.llm_openai_model_id,
-                            on_change=State.set_llm_openai_model_id,
+            rx.vstack(
+                _auth_method_selector(State.llm_openai_auth_method, State.set_llm_openai_auth_method),
+                rx.cond(
+                    State.llm_openai_auth_method == "API Key",
+                    rx.vstack(
+                        rx.text("OpenAI API Key", weight="medium", size="2"),
+                        rx.input(
+                            placeholder=rx.cond(
+                                State.llm_openai_key_saved,
+                                "Key saved — enter new value to replace",
+                                "sk-...",
+                            ),
+                            value=State.llm_openai_api_key,
+                            on_change=State.set_llm_openai_api_key,
+                            type="password",
                             width="100%",
                         ),
-                        rx.button(
-                            rx.cond(
-                                State.llm_openai_models_loading,
-                                rx.spinner(size="1"),
-                                rx.icon("refresh-cw", size=14),
-                            ),
-                            on_click=State.load_openai_models,
-                            disabled=State.llm_openai_models_loading,
-                            variant="ghost",
-                            size="1",
-                        ),
+                        align_items="start",
                         width="100%",
-                        align="center",
                     ),
-                    rx.cond(
-                        State.llm_openai_models_error != "",
-                        rx.text(State.llm_openai_models_error, size="1", color="red"),
-                    ),
-                    align_items="start",
-                    width="100%",
+                    _signin_openai(),
                 ),
-                columns="2",
-                spacing="4",
+                _llm_model_selector(
+                    State.openai_model_options,
+                    State.llm_openai_model_id,
+                    State.set_llm_openai_model_id,
+                    State.load_openai_models,
+                    State.llm_openai_models_loading,
+                    State.llm_openai_models_error,
+                    "gpt-4o",
+                ),
+                align_items="start",
                 width="100%",
+                spacing="3",
             ),
         ),
         # GitHub Copilot fields
         rx.cond(
             State.llm_provider == "GitHub Copilot",
             rx.vstack(
-                rx.grid(
+                _auth_method_selector(State.llm_copilot_auth_method, State.set_llm_copilot_auth_method),
+                rx.cond(
+                    State.llm_copilot_auth_method == "API Key",
                     rx.vstack(
                         rx.text("GitHub Token", weight="medium", size="2"),
                         rx.input(
@@ -3882,40 +4540,55 @@ def llm_settings_section() -> rx.Component:
                         align_items="start",
                         width="100%",
                     ),
+                    _signin_copilot(),
+                ),
+                _llm_model_selector(
+                    State.copilot_model_options,
+                    State.llm_copilot_model_id,
+                    State.set_llm_copilot_model_id,
+                    State.load_copilot_models,
+                    State.llm_copilot_models_loading,
+                    State.llm_copilot_models_error,
+                    rx.cond(State.llm_copilot_auth_method == "API Key", "openai/gpt-4o", "gpt-4o"),
+                ),
+                align_items="start",
+                width="100%",
+                spacing="3",
+            ),
+        ),
+        # Anthropic fields
+        rx.cond(
+            State.llm_provider == "Anthropic",
+            rx.vstack(
+                _auth_method_selector(State.llm_anthropic_auth_method, State.set_llm_anthropic_auth_method),
+                rx.cond(
+                    State.llm_anthropic_auth_method == "API Key",
                     rx.vstack(
-                        rx.text("Model", weight="medium", size="2"),
-                        rx.hstack(
-                            rx.select(
-                                State.copilot_model_options,
-                                placeholder="openai/gpt-4o",
-                                value=State.llm_copilot_model_id,
-                                on_change=State.set_llm_copilot_model_id,
-                                width="100%",
+                        rx.text("Anthropic API Key", weight="medium", size="2"),
+                        rx.input(
+                            placeholder=rx.cond(
+                                State.llm_anthropic_key_saved,
+                                "Key saved — enter new value to replace",
+                                "sk-ant-...",
                             ),
-                            rx.button(
-                                rx.cond(
-                                    State.llm_copilot_models_loading,
-                                    rx.spinner(size="1"),
-                                    rx.icon("refresh-cw", size=14),
-                                ),
-                                on_click=State.load_copilot_models,
-                                disabled=State.llm_copilot_models_loading,
-                                variant="ghost",
-                                size="1",
-                            ),
+                            value=State.llm_anthropic_api_key,
+                            on_change=State.set_llm_anthropic_api_key,
+                            type="password",
                             width="100%",
-                            align="center",
-                        ),
-                        rx.cond(
-                            State.llm_copilot_models_error != "",
-                            rx.text(State.llm_copilot_models_error, size="1", color="red"),
                         ),
                         align_items="start",
                         width="100%",
                     ),
-                    columns="2",
-                    spacing="4",
-                    width="100%",
+                    _signin_anthropic(),
+                ),
+                _llm_model_selector(
+                    State.anthropic_model_options,
+                    State.llm_anthropic_model_id,
+                    State.set_llm_anthropic_model_id,
+                    State.load_anthropic_models,
+                    State.llm_anthropic_models_loading,
+                    State.llm_anthropic_models_error,
+                    "claude-sonnet-4-5",
                 ),
                 align_items="start",
                 width="100%",

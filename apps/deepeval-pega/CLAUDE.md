@@ -112,13 +112,18 @@ fastmcp dev qa_results_mcp_server.py     # inspector UI
 | `AGENTX_BASE_URL` | Pega instance base URL |
 | `AGENT_NAME` | Pega agent rule name (`@CLASSNAME!NAME` format) |
 | `PEGA_CLIENT_ID` / `PEGA_CLIENT_SECRET` | OAuth2 credentials |
-| `LLM_PROVIDER` | LLM judge provider: `gemini` (default), `bedrock`, `openai`, or `copilot` |
+| `LLM_PROVIDER` | LLM judge provider: `gemini` (default), `bedrock`, `openai`, `copilot`, or `anthropic` |
 | `GEMINI_API_KEY` | Google Gemini API key (when `LLM_PROVIDER=gemini`) |
 | `GEMINI_MODEL_ID` | Gemini model name (default `gemini-2.5-flash`; when `LLM_PROVIDER=gemini`) |
-| `OPENAI_API_KEY` | OpenAI API key (when `LLM_PROVIDER=openai`) |
+| `OPENAI_AUTH_METHOD` | OpenAI auth: `api_key` (default) or `oauth` (Sign in with ChatGPT subscription) |
+| `OPENAI_API_KEY` | OpenAI API key (when `LLM_PROVIDER=openai` and `OPENAI_AUTH_METHOD=api_key`) |
 | `OPENAI_MODEL_ID` | OpenAI model name (default `gpt-4o`; when `LLM_PROVIDER=openai`) |
-| `GITHUB_COPILOT_TOKEN` | GitHub PAT with Copilot access (when `LLM_PROVIDER=copilot`) |
+| `COPILOT_AUTH_METHOD` | Copilot auth: `api_key` (default, GitHub PAT) or `oauth` (Copilot subscription) |
+| `GITHUB_COPILOT_TOKEN` | GitHub PAT with Copilot access (when `COPILOT_AUTH_METHOD=api_key`) |
 | `GITHUB_COPILOT_MODEL_ID` | GitHub Copilot model (default `openai/gpt-4o`; uses `publisher/model` format) |
+| `ANTHROPIC_AUTH_METHOD` | Anthropic auth: `api_key` (default) or `oauth` (Sign in with Claude subscription) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (when `LLM_PROVIDER=anthropic` and `ANTHROPIC_AUTH_METHOD=api_key`) |
+| `ANTHROPIC_MODEL_ID` | Anthropic model name (default `claude-sonnet-4-5`; when `LLM_PROVIDER=anthropic`) |
 | `AWS_AUTH_METHOD` | Bedrock auth: `access_keys` (default) or `sso_profile` |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | AWS credentials (when `AWS_AUTH_METHOD=access_keys`) |
 | `AWS_PROFILE` | Named AWS CLI/SSO profile (when `AWS_AUTH_METHOD=sso_profile`) |
@@ -141,7 +146,8 @@ Reflex Web UI (DeepEval_Pega/DeepEval_Pega.py)
             ├─► create_judge_llm() ──► GeminiJudgeLLM         ──► Google Gemini
             │                     ├─► OpenAIJudgeLLM        ──► OpenAI
             │                     ├─► BedrockJudgeLLM       ──► AWS Bedrock (Claude/Titan/Llama)
-            │                     └─► GitHubCopilotJudgeLLM ──► GitHub Models
+            │                     ├─► GitHubCopilotJudgeLLM ──► GitHub Models
+            │                     └─► AnthropicJudgeLLM     ──► Anthropic API (Claude)
             └─► conftest.py hooks
                     ├─► report_generator.py ──► QA_Report_<timestamp>.md
                     └─► db_etl.py ──► qa_results.db (SQLite)
@@ -184,7 +190,8 @@ Reflex Web UI (DeepEval_Pega/DeepEval_Pega.py)
 | File | Purpose |
 |---|---|
 | `test_golden_session.py` | 13-test suite + `AgentXTransport` class |
-| `test_surface_agents.py` | Shared utilities: `_JudgeLLMBase`, `GeminiJudgeLLM`, `BedrockJudgeLLM`, `OpenAIJudgeLLM`, `GitHubCopilotJudgeLLM`, `create_judge_llm()`, `PegaInsight`; dataclasses `AgentResponse`, `StepAgentExecution`, `CanonicalToolEvent`, `ConversationInsight`; tool detection functions |
+| `test_surface_agents.py` | Shared utilities: `_JudgeLLMBase`, `GeminiJudgeLLM`, `BedrockJudgeLLM`, `OpenAIJudgeLLM`, `GitHubCopilotJudgeLLM`, `AnthropicJudgeLLM`, `create_judge_llm()`, `PegaInsight`; dataclasses `AgentResponse`, `StepAgentExecution`, `CanonicalToolEvent`, `ConversationInsight`; tool detection functions |
+| `llm_oauth.py` | OAuth/subscription sign-in for the LLM judge (OpenAI ChatGPT, GitHub Copilot device-code, Anthropic Claude): PKCE/device-code flows, token storage/refresh in the `__oauth__` vault namespace, and `get_*_token`/`*_generate` helpers consumed by the judge classes |
 | `capture_golden_session.py` | Record golden sessions; `_normalize_workflows()` coerces legacy configs; `--workflow-id` flag annotates sessions |
 | `conftest.py` | Pytest hooks: `pytest_addoption` (`--golden`, `--transport`, `--metrics`), `pytest_runtest_logreport` (accumulate results), `pytest_sessionfinish` (generate report + ETL to SQLite) |
 | `report_generator.py` | Generate QA markdown reports from accumulated test results |
@@ -311,7 +318,23 @@ The judge LLM is selected at runtime via `LLM_PROVIDER` in `.env` (or set from t
 
 **GitHub Copilot** (`GitHubCopilotJudgeLLM`): reads `GITHUB_COPILOT_TOKEN` and `GITHUB_COPILOT_MODEL_ID` (default `openai/gpt-4o`). Uses the OpenAI-compatible API at `https://models.github.ai/inference`. Requires a GitHub PAT with Copilot access. Model IDs use `publisher/model` format (e.g., `openai/gpt-4o`, `deepseek/deepseek-r1`, `meta/llama-3.3-70b-instruct`). Available models are fetched from the GitHub Models catalog at `https://models.github.ai/v1/models`.
 
+**Anthropic** (`AnthropicJudgeLLM`): reads `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL_ID` (default `claude-sonnet-4-5`). Uses the first-party Anthropic Messages API via the official `anthropic` SDK with the shared `_SYSTEM_INSTRUCTION` as the `system` prompt. This is distinct from the AWS Bedrock path, which reaches Claude models through AWS. Available models are fetched from Anthropic's catalog at `https://api.anthropic.com/v1/models`.
+
 The **Configuration tab** in the Reflex UI exposes a "LLM Judge Settings" section where the provider, auth method, and credentials can be changed and saved to `.env` without editing the file manually. Each provider has a **dynamic model dropdown** with a refresh button that fetches available models from the provider's API (Gemini model list, Bedrock foundation models + inference profiles, OpenAI model list, GitHub Models catalog). A "Test Connection" button makes a minimal live API call using the current form values before saving. LLM settings can also be saved as **named profiles** (stored in `llm_profiles/`) for quick switching between providers — loading a profile activates it by writing to `.env`.
+
+## Subscription Sign-In (OAuth) for the LLM Judge
+
+OpenAI, GitHub Copilot, and Anthropic each support **two auth methods**, selected per provider in the Configuration tab (mirrors the Bedrock "Access Keys / SSO Profile" toggle) and persisted via `OPENAI_AUTH_METHOD` / `COPILOT_AUTH_METHOD` / `ANTHROPIC_AUTH_METHOD` (`api_key` default, or `oauth`):
+
+- **API Key** — the existing behaviour (PAT/API key).
+- **Sign in** — use the user's existing subscription via the provider's official OAuth flow. Implemented in `llm_oauth.py`:
+  - **GitHub Copilot** — GitHub OAuth **device-code** flow. The long-lived GitHub token is stored and exchanged at use time for a short-lived Copilot bearer token; calls go to `api.githubcopilot.com`.
+  - **OpenAI (ChatGPT Plus/Pro)** — "Sign in with ChatGPT" **OAuth PKCE** flow (Codex CLI client). Judge calls the ChatGPT backend **Responses API** (`chatgpt.com/backend-api/codex/responses`).
+  - **Anthropic (Claude Pro/Max)** — "Sign in with Claude" **OAuth PKCE** flow (Claude Code client). Judge calls the standard Messages API with a Bearer token + `anthropic-beta: oauth-2025-04-20` and the required Claude Code system preamble.
+
+OAuth tokens (with refresh tokens) are stored in the gitignored vault `llm_profiles/.credentials.json` under the reserved `__oauth__` key — never in `.env`. Only the `*_AUTH_METHOD` flag goes to `.env`, so the headless pytest subprocess and REST API resolve and auto-refresh tokens non-interactively. Sign-in itself is interactive and happens in the UI.
+
+> **Note:** The GitHub Copilot device-code flow is officially supported and stable. The OpenAI ChatGPT and Anthropic Claude subscription OAuth flows reuse the Codex CLI / Claude Code client IDs and endpoints (not officially documented public APIs) and may change; client IDs/endpoints are overridable via env vars (`OPENAI_OAUTH_CLIENT_ID`, `ANTHROPIC_OAUTH_CLIENT_ID`, `COPILOT_OAUTH_CLIENT_ID`, etc.).
 
 ## Technology Stack
 
