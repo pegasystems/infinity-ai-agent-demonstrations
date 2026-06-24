@@ -146,7 +146,7 @@ PEGA_CLIENT_SECRET=<your-client-secret>
 PROJECT_CONFIG=project_config.myagent.json
 
 # ── LLM Judge Provider ──────────────────────────────────────
-# Options: "gemini", "bedrock", "openai", or "copilot"
+# Options: "gemini", "bedrock", "openai", "copilot", or "anthropic"
 LLM_PROVIDER=gemini
 
 # Google Gemini (when LLM_PROVIDER=gemini)
@@ -154,6 +154,7 @@ GEMINI_API_KEY=<your-gemini-api-key>
 GEMINI_MODEL_ID=gemini-2.5-flash
 
 # OpenAI (when LLM_PROVIDER=openai)
+OPENAI_AUTH_METHOD=api_key           # "api_key" or "oauth" (Sign in with ChatGPT subscription)
 OPENAI_API_KEY=<your-openai-api-key>
 OPENAI_MODEL_ID=gpt-4o
 
@@ -166,8 +167,14 @@ AWS_BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
 # For SSO: set AWS_AUTH_METHOD=sso_profile, AWS_PROFILE=<name>, then run: aws sso login --profile <name>
 
 # GitHub Copilot (when LLM_PROVIDER=copilot)
+COPILOT_AUTH_METHOD=api_key          # "api_key" (GitHub PAT) or "oauth" (Copilot subscription)
 GITHUB_COPILOT_TOKEN=<your-github-pat>
 GITHUB_COPILOT_MODEL_ID=openai/gpt-4o
+
+# Anthropic (when LLM_PROVIDER=anthropic)
+ANTHROPIC_AUTH_METHOD=api_key        # "api_key" or "oauth" (Sign in with Claude subscription)
+ANTHROPIC_API_KEY=<your-anthropic-api-key>
+ANTHROPIC_MODEL_ID=claude-sonnet-4-5
 ```
 
 | Variable | Required | Description |
@@ -177,10 +184,11 @@ GITHUB_COPILOT_MODEL_ID=openai/gpt-4o
 | `PEGA_CLIENT_ID` | Yes | OAuth2 client ID for the Pega environment |
 | `PEGA_CLIENT_SECRET` | Yes | OAuth2 client secret |
 | `PROJECT_CONFIG` | No | Project config filename in `project_templates/` (auto-discovered if omitted) |
-| `LLM_PROVIDER` | No | LLM judge provider: `gemini` (default), `bedrock`, `openai`, or `copilot` |
+| `LLM_PROVIDER` | No | LLM judge provider: `gemini` (default), `bedrock`, `openai`, `copilot`, or `anthropic` |
 | `GEMINI_API_KEY` | If Gemini | Google AI Gemini API key |
 | `GEMINI_MODEL_ID` | No | Gemini model name (default `gemini-2.5-flash`) |
-| `OPENAI_API_KEY` | If OpenAI | OpenAI API key |
+| `OPENAI_AUTH_METHOD` | If OpenAI | `api_key` (default) or `oauth` (Sign in with ChatGPT subscription) |
+| `OPENAI_API_KEY` | If OpenAI + api_key | OpenAI API key |
 | `OPENAI_MODEL_ID` | No | OpenAI model name (default `gpt-4o`) |
 | `AWS_AUTH_METHOD` | If Bedrock | `access_keys` (default) or `sso_profile` |
 | `AWS_ACCESS_KEY_ID` | If Bedrock + access_keys | AWS access key |
@@ -188,8 +196,12 @@ GITHUB_COPILOT_MODEL_ID=openai/gpt-4o
 | `AWS_PROFILE` | If Bedrock + sso_profile | Named AWS CLI/SSO profile |
 | `AWS_REGION` | No | AWS region for Bedrock (default `us-east-1`) |
 | `AWS_BEDROCK_MODEL_ID` | No | Bedrock model ID (default `anthropic.claude-3-5-sonnet-20241022-v2:0`) |
-| `GITHUB_COPILOT_TOKEN` | If Copilot | GitHub PAT with Copilot access |
+| `COPILOT_AUTH_METHOD` | If Copilot | `api_key` (default, GitHub PAT) or `oauth` (Copilot subscription) |
+| `GITHUB_COPILOT_TOKEN` | If Copilot + api_key | GitHub PAT with Copilot access |
 | `GITHUB_COPILOT_MODEL_ID` | No | GitHub Copilot model (default `openai/gpt-4o`; uses `publisher/model` format) |
+| `ANTHROPIC_AUTH_METHOD` | If Anthropic | `api_key` (default) or `oauth` (Sign in with Claude subscription) |
+| `ANTHROPIC_API_KEY` | If Anthropic + api_key | First-party Anthropic API key |
+| `ANTHROPIC_MODEL_ID` | No | Anthropic model name (default `claude-sonnet-4-5`) |
 
 ### 4. Verify Your Connection
 
@@ -807,7 +819,7 @@ The main web application built with Reflex. Contains:
 
 ### LLM Judge (`test_surface_agents.py`)
 
-Pluggable LLM judge with four provider implementations sharing a common `_JudgeLLMBase(DeepEvalBaseLLM)` base class:
+Pluggable LLM judge with five provider implementations sharing a common `_JudgeLLMBase(DeepEvalBaseLLM)` base class:
 
 | Class | Provider | Default Model |
 |---|---|---|
@@ -815,8 +827,13 @@ Pluggable LLM judge with four provider implementations sharing a common `_JudgeL
 | `OpenAIJudgeLLM` | OpenAI | `gpt-4o` (configurable) |
 | `BedrockJudgeLLM` | AWS Bedrock | Anthropic, Amazon, or Meta models (supports inference profiles) |
 | `GitHubCopilotJudgeLLM` | GitHub Copilot | `openai/gpt-4o` (any model from GitHub Models catalog) |
+| `AnthropicJudgeLLM` | Anthropic API | `claude-sonnet-4-5` (any model from Anthropic catalog) |
 
 The `create_judge_llm()` factory reads `LLM_PROVIDER` from the environment and returns the appropriate instance. All providers share `_fix_json_escapes()` and `_flatten_data_in_response()` for robust DeepEval integration.
+
+#### Subscription sign-in (OAuth)
+
+OpenAI, GitHub Copilot, and Anthropic each support an **API key** or **Sign in** auth method (set in the Configuration tab, persisted as `OPENAI_AUTH_METHOD` / `COPILOT_AUTH_METHOD` / `ANTHROPIC_AUTH_METHOD` = `api_key` | `oauth`). The **Sign in** option lets you evaluate using your existing subscription via each provider's official OAuth flow (`llm_oauth.py`): GitHub Copilot device-code, "Sign in with ChatGPT" (PKCE → ChatGPT Responses API), and "Sign in with Claude" (PKCE → Messages API). OAuth tokens are stored with refresh tokens in the gitignored `llm_profiles/.credentials.json` vault and auto-refreshed, so headless test/REST runs stay non-interactive. The GitHub Copilot flow is officially supported; the ChatGPT and Claude subscription flows reuse the Codex CLI / Claude Code clients and may change.
 
 LLM settings can be saved as **named profiles** (stored in `llm_profiles/`) and selected per evaluation run via the REST API's `llm_profile` field.
 

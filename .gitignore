@@ -37,9 +37,11 @@ _live_run_*.json
 test_results/_pytest_results_*.json
 sample_agent_output.json
 to-do.md
-project_templates/project_config.uplus_retail_bank.json
-golden_sessions/golden_*.json
-golden_sessions/profile_*.json
+
+# Profiles and templates
+project_templates/
+golden_sessions/
+llm_profiles/
 
 # OS
 .DS_Store

@@ -93,6 +93,9 @@ def _load_profile_env_vars(display_name: str) -> dict[str, str]:
     elif provider == "copilot":
         if data.get("copilot_model_id"):
             env_vars["GITHUB_COPILOT_MODEL_ID"] = data["copilot_model_id"]
+    elif provider == "anthropic":
+        if data.get("anthropic_model_id"):
+            env_vars["ANTHROPIC_MODEL_ID"] = data["anthropic_model_id"]
 
     if _LLM_CREDENTIALS_FILE.exists():
         try:

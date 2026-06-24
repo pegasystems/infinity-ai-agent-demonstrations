@@ -23,6 +23,8 @@ load_dotenv(dotenv_path=_env_path)
 # --- LLM Judge base and provider implementations ---
 from google import genai
 
+import llm_oauth
+
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "gemini").lower()
 
@@ -287,20 +289,32 @@ class BedrockJudgeLLM(_JudgeLLMBase):
 
 
 class OpenAIJudgeLLM(_JudgeLLMBase):
-    """DeepEval judge that calls OpenAI via API key."""
+    """DeepEval judge that calls OpenAI via API key or a ChatGPT subscription (OAuth)."""
 
-    def __init__(self, model_name: str = "gpt-4o"):
+    def __init__(self, model_name: str = "gpt-4o", auth_method: str = "api_key"):
         self._model_name = model_name
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is required")
-        from openai import OpenAI
-        self._client = OpenAI(api_key=api_key)
+        self._auth_method = (auth_method or "api_key").lower()
+        if self._auth_method == "oauth":
+            # ChatGPT subscription path — token is resolved lazily per call via
+            # llm_oauth (which refreshes as needed). Fail fast if not signed in.
+            llm_oauth.get_openai_credentials()
+            self._client = None
+        else:
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY environment variable is required")
+            from openai import OpenAI
+            self._client = OpenAI(api_key=api_key)
 
     def load_model(self):
         return self._client
 
     def generate(self, prompt: str, schema=None, *args, **kwargs) -> str:
+        if self._auth_method == "oauth":
+            text = llm_oauth.openai_chatgpt_generate(
+                self._model_name, self._SYSTEM_INSTRUCTION, prompt
+            )
+            return self._flatten_data_in_response(text)
         response = self._client.chat.completions.create(
             model=self._model_name,
             temperature=0,
@@ -321,20 +335,96 @@ class OpenAIJudgeLLM(_JudgeLLMBase):
         return self._model_name
 
 
-class GitHubCopilotJudgeLLM(_JudgeLLMBase):
-    """DeepEval judge that calls GitHub Copilot models via the OpenAI-compatible API."""
+class AnthropicJudgeLLM(_JudgeLLMBase):
+    """DeepEval judge that calls the first-party Anthropic API (Claude models).
 
-    def __init__(self, model_name: str = "gpt-4o"):
-        self._model_name = model_name.lstrip("/")
-        raw_token = os.environ.get("GITHUB_COPILOT_TOKEN", "")
-        token = raw_token.encode("ascii", errors="ignore").decode("ascii").strip()
-        if not token:
-            raise ValueError("GITHUB_COPILOT_TOKEN environment variable is required")
-        from openai import OpenAI
-        self._client = OpenAI(
-            api_key=token,
-            base_url="https://models.github.ai/inference",
+    Supports either an API key (``x-api-key``) or a Claude Pro/Max subscription
+    via OAuth (``Authorization: Bearer`` + the OAuth beta header).
+    """
+
+    def __init__(self, model_name: str = "claude-sonnet-4-5", auth_method: str = "api_key"):
+        self._model_name = model_name
+        self._auth_method = (auth_method or "api_key").lower()
+        from anthropic import Anthropic
+        if self._auth_method == "oauth":
+            token = llm_oauth.get_anthropic_token()
+            self._client = Anthropic(
+                auth_token=token,
+                default_headers={"anthropic-beta": llm_oauth.ANTHROPIC_OAUTH_BETA},
+            )
+        else:
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ValueError("ANTHROPIC_API_KEY environment variable is required")
+            self._client = Anthropic(api_key=api_key)
+
+    def load_model(self):
+        return self._client
+
+    def generate(self, prompt: str, schema=None, *args, **kwargs) -> str:
+        if self._auth_method == "oauth":
+            # OAuth/subscription tokens require the Claude Code system preamble as
+            # the first system block, otherwise the Messages API rejects the call.
+            system = [
+                {"type": "text", "text": llm_oauth.ANTHROPIC_OAUTH_SYSTEM_PREFIX},
+                {"type": "text", "text": self._SYSTEM_INSTRUCTION},
+            ]
+        else:
+            system = self._SYSTEM_INSTRUCTION
+        response = self._client.messages.create(
+            model=self._model_name,
+            max_tokens=4096,
+            temperature=0,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
         )
+        text = "".join(
+            block.text for block in response.content if getattr(block, "type", None) == "text"
+        )
+        return self._flatten_data_in_response(text)
+
+    async def a_generate(self, prompt: str, schema=None, *args, **kwargs) -> str:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.generate(prompt, schema=schema)
+        )
+
+    def get_model_name(self) -> str:
+        return self._model_name
+
+
+class GitHubCopilotJudgeLLM(_JudgeLLMBase):
+    """DeepEval judge that calls GitHub Copilot models via the OpenAI-compatible API.
+
+    Two auth methods:
+      - ``api_key``: a GitHub PAT against the GitHub Models endpoint
+        (``models.github.ai/inference``); model ids use ``publisher/model`` form.
+      - ``oauth``: a GitHub Copilot subscription (device-code sign-in). The
+        long-lived GitHub token is exchanged for a short-lived Copilot bearer
+        token and calls go to the Copilot API (``api.githubcopilot.com``).
+    """
+
+    def __init__(self, model_name: str = "gpt-4o", auth_method: str = "api_key"):
+        self._auth_method = (auth_method or "api_key").lower()
+        from openai import OpenAI
+        if self._auth_method == "oauth":
+            self._model_name = model_name.lstrip("/")
+            token = llm_oauth.get_copilot_token()
+            self._client = OpenAI(
+                api_key=token,
+                base_url=llm_oauth.get_copilot_api_base(),
+                default_headers=llm_oauth.copilot_request_headers(),
+            )
+        else:
+            self._model_name = model_name.lstrip("/")
+            raw_token = os.environ.get("GITHUB_COPILOT_TOKEN", "")
+            token = raw_token.encode("ascii", errors="ignore").decode("ascii").strip()
+            if not token:
+                raise ValueError("GITHUB_COPILOT_TOKEN environment variable is required")
+            self._client = OpenAI(
+                api_key=token,
+                base_url="https://models.github.ai/inference",
+            )
 
     def load_model(self):
         return self._client
@@ -372,9 +462,18 @@ def create_judge_llm() -> _JudgeLLMBase:
               requires AWS_PROFILE (named profile in ~/.aws/config;
               run `aws sso login --profile <name>` before use)
             Both methods also use AWS_REGION and AWS_BEDROCK_MODEL_ID.
-      - "openai"  → OpenAIJudgeLLM  (requires OPENAI_API_KEY; OPENAI_MODEL_ID optional)
-      - "copilot" → GitHubCopilotJudgeLLM (requires GITHUB_COPILOT_TOKEN;
-            GITHUB_COPILOT_MODEL_ID optional, defaults to gpt-4o)
+      - "openai"  → OpenAIJudgeLLM
+            OPENAI_AUTH_METHOD=api_key (default): requires OPENAI_API_KEY
+            OPENAI_AUTH_METHOD=oauth: ChatGPT subscription (sign in via the UI)
+            OPENAI_MODEL_ID optional.
+      - "copilot" → GitHubCopilotJudgeLLM
+            COPILOT_AUTH_METHOD=api_key (default): requires GITHUB_COPILOT_TOKEN
+            COPILOT_AUTH_METHOD=oauth: Copilot subscription (sign in via the UI)
+            GITHUB_COPILOT_MODEL_ID optional, defaults to gpt-4o.
+      - "anthropic" → AnthropicJudgeLLM
+            ANTHROPIC_AUTH_METHOD=api_key (default): requires ANTHROPIC_API_KEY
+            ANTHROPIC_AUTH_METHOD=oauth: Claude subscription (sign in via the UI)
+            ANTHROPIC_MODEL_ID optional, defaults to claude-sonnet-4-5.
     """
     provider = os.environ.get("LLM_PROVIDER", "gemini").lower()
     if provider == "bedrock":
@@ -385,10 +484,16 @@ def create_judge_llm() -> _JudgeLLMBase:
         return BedrockJudgeLLM(model_id=model_id, region=region)
     if provider == "openai":
         model_name = os.environ.get("OPENAI_MODEL_ID", "gpt-4o")
-        return OpenAIJudgeLLM(model_name=model_name)
+        auth_method = os.environ.get("OPENAI_AUTH_METHOD", "api_key")
+        return OpenAIJudgeLLM(model_name=model_name, auth_method=auth_method)
     if provider == "copilot":
         model_name = os.environ.get("GITHUB_COPILOT_MODEL_ID", "openai/gpt-4o")
-        return GitHubCopilotJudgeLLM(model_name=model_name)
+        auth_method = os.environ.get("COPILOT_AUTH_METHOD", "api_key")
+        return GitHubCopilotJudgeLLM(model_name=model_name, auth_method=auth_method)
+    if provider == "anthropic":
+        model_name = os.environ.get("ANTHROPIC_MODEL_ID", "claude-sonnet-4-5")
+        auth_method = os.environ.get("ANTHROPIC_AUTH_METHOD", "api_key")
+        return AnthropicJudgeLLM(model_name=model_name, auth_method=auth_method)
     model_name = os.environ.get("GEMINI_MODEL_ID", "gemini-2.5-flash")
     return GeminiJudgeLLM(model_name=model_name)
 
