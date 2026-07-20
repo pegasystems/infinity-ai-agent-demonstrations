@@ -1,5 +1,6 @@
 assets/external/
 .states
+CLAUDE.md
 *.db
 *.py[cod]
 .web
