@@ -3,6 +3,7 @@ assets/external/
 *.db
 *.py[cod]
 .web
+reflex.lock/
 # Credentials & secrets
 .env
 evaluator-sa-key.json
