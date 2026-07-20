@@ -167,11 +167,21 @@ def _decode_jwt_payload(token: str) -> dict:
         return {}
 
 
+def _required_env(name: str, purpose: str) -> str:
+    """Return a required environment variable or raise a clear config error."""
+    value = (os.environ.get(name) or "").strip()
+    if value:
+        return value
+    raise RuntimeError(
+        f"Missing required environment variable: {name}. "
+        f"Set it to use {purpose}."
+    )
+
+
 # ==========================================================================
 # GitHub Copilot — OAuth device-code flow
 # ==========================================================================
 
-GITHUB_CLIENT_ID = os.environ.get("COPILOT_OAUTH_CLIENT_ID", "Iv1.b507a08c87ecfe98")
 GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
 GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
@@ -179,6 +189,10 @@ COPILOT_TOKEN_URL = os.environ.get(
     "COPILOT_TOKEN_URL", "https://api.github.com/copilot_internal/v2/token"
 )
 COPILOT_API_BASE = os.environ.get("COPILOT_API_BASE", "https://api.githubcopilot.com")
+
+
+def _copilot_client_id() -> str:
+    return _required_env("COPILOT_OAUTH_CLIENT_ID", "GitHub Copilot OAuth sign-in")
 
 _COPILOT_HEADERS = {
     "Editor-Version": "vscode/1.96.0",
@@ -195,9 +209,10 @@ def copilot_request_headers() -> Dict[str, str]:
 
 def copilot_start_device_login(timeout: int = 15) -> Dict[str, Any]:
     """Begin the device-code flow. Returns user_code, verification_uri, device_code, interval."""
+    client_id = _copilot_client_id()
     resp = requests.post(
         GITHUB_DEVICE_CODE_URL,
-        data={"client_id": GITHUB_CLIENT_ID, "scope": "read:user"},
+        data={"client_id": client_id, "scope": "read:user"},
         headers={"Accept": "application/json"},
         timeout=timeout,
     )
@@ -214,10 +229,11 @@ def copilot_poll_once(device_code: str, timeout: int = 15) -> Tuple[str, Optiona
     Returns (status, error_or_none) where status is one of:
     "ok" (login complete + stored), "pending", "slow_down", or "error".
     """
+    client_id = _copilot_client_id()
     resp = requests.post(
         GITHUB_ACCESS_TOKEN_URL,
         data={
-            "client_id": GITHUB_CLIENT_ID,
+            "client_id": client_id,
             "device_code": device_code,
             "grant_type": GITHUB_DEVICE_GRANT,
         },
@@ -321,7 +337,6 @@ def copilot_list_models(timeout: int = 20) -> List[str]:
 # OpenAI — "Sign in with ChatGPT" OAuth PKCE flow (Codex)
 # ==========================================================================
 
-OPENAI_CLIENT_ID = os.environ.get("OPENAI_OAUTH_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
 OPENAI_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
 OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
 OPENAI_REDIRECT_URI = os.environ.get(
@@ -332,18 +347,23 @@ OPENAI_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 _OPENAI_AUTH_CLAIM = "https://api.openai.com/auth"
 
 
+def _openai_client_id() -> str:
+    return _required_env("OPENAI_OAUTH_CLIENT_ID", "OpenAI ChatGPT OAuth sign-in")
+
+
 def openai_build_authorize_url() -> Tuple[str, str, str]:
     """Return (authorize_url, state, code_verifier) for the ChatGPT sign-in flow.
 
     The verifier/state are also persisted server-side so the exchange does not
     depend on UI state surviving the round-trip.
     """
+    client_id = _openai_client_id()
     verifier, challenge = generate_pkce()
     state = _new_state()
     _store_pending("openai", {"verifier": verifier, "state": state})
     params = {
         "response_type": "code",
-        "client_id": OPENAI_CLIENT_ID,
+        "client_id": client_id,
         "redirect_uri": OPENAI_REDIRECT_URI,
         "scope": OPENAI_SCOPE,
         "code_challenge": challenge,
@@ -395,6 +415,7 @@ def openai_complete_login(code: str, verifier: Optional[str] = None, timeout: in
     The PKCE verifier is read from the server-side pending store; the optional
     ``verifier`` argument overrides it (kept for backward compatibility).
     """
+    client_id = _openai_client_id()
     if not verifier:
         verifier = _load_pending("openai").get("verifier")
     if not verifier:
@@ -404,7 +425,7 @@ def openai_complete_login(code: str, verifier: Optional[str] = None, timeout: in
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data={
             "grant_type": "authorization_code",
-            "client_id": OPENAI_CLIENT_ID,
+            "client_id": client_id,
             "code": code,
             "code_verifier": verifier,
             "redirect_uri": OPENAI_REDIRECT_URI,
@@ -433,13 +454,14 @@ def openai_complete_login(code: str, verifier: Optional[str] = None, timeout: in
 
 
 def _openai_refresh(refresh_token: str, timeout: int = 30) -> dict:
+    client_id = _openai_client_id()
     resp = requests.post(
         OPENAI_TOKEN_URL,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": OPENAI_CLIENT_ID,
+            "client_id": client_id,
         },
         timeout=timeout,
     )
@@ -550,9 +572,6 @@ OPENAI_OAUTH_MODELS = ["gpt-5", "gpt-5-codex", "gpt-4o", "o4-mini", "o3"]
 # Anthropic — "Sign in with Claude" OAuth PKCE flow (Claude Code)
 # ==========================================================================
 
-ANTHROPIC_CLIENT_ID = os.environ.get(
-    "ANTHROPIC_OAUTH_CLIENT_ID", "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-)
 ANTHROPIC_AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
 ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
 # Claude *subscription* (Pro/Max) flow: the code is displayed on the
@@ -572,6 +591,10 @@ ANTHROPIC_OAUTH_SYSTEM_PREFIX = (
     "You are Claude Code, Anthropic's official CLI for Claude."
 )
 
+
+def _anthropic_client_id() -> str:
+    return _required_env("ANTHROPIC_OAUTH_CLIENT_ID", "Anthropic Claude OAuth sign-in")
+
 ANTHROPIC_OAUTH_MODELS = [
     "claude-opus-4-1-20250805",
     "claude-sonnet-4-5-20250929",
@@ -586,12 +609,13 @@ def anthropic_build_authorize_url() -> Tuple[str, str, str]:
     The verifier/state are persisted server-side so the exchange always has the
     exact ``state`` Anthropic requires, regardless of UI state.
     """
+    client_id = _anthropic_client_id()
     verifier, challenge = generate_pkce()
     state = _new_state()
     _store_pending("anthropic", {"verifier": verifier, "state": state})
     params = {
         "code": "true",
-        "client_id": ANTHROPIC_CLIENT_ID,
+        "client_id": client_id,
         "response_type": "code",
         "redirect_uri": ANTHROPIC_REDIRECT_URI,
         "scope": ANTHROPIC_SCOPES,
@@ -612,6 +636,7 @@ def anthropic_complete_login(
     the server-side pending store by default so they are always present and
     correct; the optional arguments override them (backward compatible).
     """
+    client_id = _anthropic_client_id()
     pending = _load_pending("anthropic")
     verifier = verifier or pending.get("verifier")
     state = state or pending.get("state")
@@ -633,7 +658,7 @@ def anthropic_complete_login(
         },
         data={
             "grant_type": "authorization_code",
-            "client_id": ANTHROPIC_CLIENT_ID,
+            "client_id": client_id,
             "code": code,
             "state": state,
             "redirect_uri": ANTHROPIC_REDIRECT_URI,
@@ -663,13 +688,14 @@ def anthropic_complete_login(
 
 
 def _anthropic_refresh(refresh_token: str, timeout: int = 30) -> dict:
+    client_id = _anthropic_client_id()
     resp = requests.post(
         ANTHROPIC_TOKEN_URL,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": ANTHROPIC_CLIENT_ID,
+            "client_id": client_id,
         },
         timeout=timeout,
     )

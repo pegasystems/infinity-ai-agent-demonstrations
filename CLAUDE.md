@@ -334,7 +334,7 @@ OpenAI, GitHub Copilot, and Anthropic each support **two auth methods**, selecte
 
 OAuth tokens (with refresh tokens) are stored in the gitignored vault `llm_profiles/.credentials.json` under the reserved `__oauth__` key — never in `.env`. Only the `*_AUTH_METHOD` flag goes to `.env`, so the headless pytest subprocess and REST API resolve and auto-refresh tokens non-interactively. Sign-in itself is interactive and happens in the UI.
 
-> **Note:** The GitHub Copilot device-code flow is officially supported and stable. The OpenAI ChatGPT and Anthropic Claude subscription OAuth flows reuse the Codex CLI / Claude Code client IDs and endpoints (not officially documented public APIs) and may change; client IDs/endpoints are overridable via env vars (`OPENAI_OAUTH_CLIENT_ID`, `ANTHROPIC_OAUTH_CLIENT_ID`, `COPILOT_OAUTH_CLIENT_ID`, etc.).
+> **Note:** OAuth **client IDs are not bundled** — each flow reads its client ID from a required env var (`COPILOT_OAUTH_CLIENT_ID`, `OPENAI_OAUTH_CLIENT_ID`, `ANTHROPIC_OAUTH_CLIENT_ID`) and raises a clear config error if it is unset (see `_required_env()` in `llm_oauth.py`). The GitHub Copilot device-code flow is officially supported and stable. The OpenAI ChatGPT and Anthropic Claude subscription OAuth flows reuse the Codex CLI / Claude Code endpoints (not officially documented public APIs) and may change; endpoints are also overridable via env vars.
 
 ## Technology Stack
 
